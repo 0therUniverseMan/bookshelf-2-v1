@@ -1,0 +1,175 @@
+import http from 'http';
+import { nanoid } from 'nanoid';
+
+const PORT = 9000; // API will run on port 9000
+let books = [];
+
+// Response Templates
+const notFoundResponse = {
+    status: 'fail',
+    message: 'Buku tidak ditemukan',
+};
+
+const successResponse = (message, data) => ({
+    status: 'success',
+    message,
+    data,
+});
+
+const errorResponse = (message) => ({
+    status: 'fail',
+    message,
+});
+
+// Input Validation
+const validateBookInput = (data) => {
+    const { name, readPage, pageCount } = data;
+    const errors = [];
+    if (!name) errors.push('Gagal menambahkan buku. Mohon isi nama buku');
+    if (readPage > pageCount) errors.push('Gagal menambahkan buku. readPage tidak boleh lebih besar dari pageCount');
+    return errors;
+};
+
+// Handle JSON parsing
+const parseJsonBody = (req) => {
+    return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', (chunk) => {
+            body += chunk.toString(); // Convert buffer to string
+        });
+        req.on('end', () => {
+            try {
+                const data = JSON.parse(body); // Parse JSON
+                resolve(data);
+            } catch (error) {
+                reject('Gagal memproses input. Format JSON tidak valid.');
+            }
+        });
+    });
+};
+
+// Request Listener
+const requestListener = async (req, res) => {
+    const { method, url } = req;
+
+    console.log(`Method: ${method}, URL: ${url}`); // Logging request method and URL
+
+    try {
+        if (method === 'POST' && url === '/books') {
+            const data = await parseJsonBody(req);
+            const validationErrors = validateBookInput(data);
+
+            if (validationErrors.length > 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify(errorResponse(validationErrors.join(', '))));
+            }
+
+            const id = nanoid();
+            const finished = data.pageCount === data.readPage;
+            const timeStamp = new Date().toISOString();
+
+            const newBook = {
+                id,
+                ...data,
+                finished,
+                insertedAt: timeStamp,
+                updatedAt: timeStamp,
+            };
+
+            books.push(newBook);
+            res.writeHead(201, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(successResponse('Buku berhasil ditambahkan', { bookId: id })));
+
+        } else if (method === 'GET' && url === '/books') {
+            const query = new URLSearchParams(url.split('?')[ 1 ]);
+            let filteredBooks = books;
+
+            if (query.has('name')) {
+                const name = query.get('name').toLowerCase();
+                filteredBooks = filteredBooks.filter((book) => book.name.toLowerCase().includes(name));
+            }
+
+            if (query.has('reading')) {
+                const reading = query.get('reading') === '1';
+                filteredBooks = filteredBooks.filter((book) => book.reading === reading);
+            }
+
+            if (query.has('finished')) {
+                const finished = query.get('finished') === '1';
+                filteredBooks = filteredBooks.filter((book) => book.finished === finished);
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(successResponse('Berhasil mendapatkan daftar buku', {
+                books: filteredBooks.map(({ id, name, publisher }) => ({ id, name, publisher })),
+            })));
+
+        } else if (method === 'GET' && url.startsWith('/books/')) {
+            const bookId = url.split('/')[ 2 ];
+            const book = books.find((b) => b.id === bookId);
+
+            if (!book) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify(notFoundResponse));
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(successResponse('Buku ditemukan', { book })));
+
+        } else if (method === 'PUT' && url.startsWith('/books/')) {
+            const bookId = url.split('/')[ 2 ];
+            const data = await parseJsonBody(req);
+            const validationErrors = validateBookInput(data);
+
+            if (validationErrors.length > 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify(errorResponse(validationErrors.join(', '))));
+            }
+
+            const index = books.findIndex((b) => b.id === bookId);
+
+            if (index === -1) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify(notFoundResponse));
+            }
+
+            books[ index ] = {
+                ...books[ index ],
+                ...data,
+                updatedAt: new Date().toISOString(),
+            };
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(successResponse('Buku berhasil diperbarui')));
+
+        } else if (method === 'DELETE' && url.startsWith('/books/')) {
+            const bookId = url.split('/')[ 2 ];
+            const index = books.findIndex((b) => b.id === bookId);
+
+            if (index === -1) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify(notFoundResponse));
+            }
+
+            books.splice(index, 1);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(successResponse('Buku berhasil dihapus')));
+
+        } else {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(errorResponse('Endpoint tidak ditemukan')));
+        }
+    } catch (error) {
+        console.error(error);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(errorResponse('Terjadi kesalahan pada server')));
+    }
+};
+
+// Create Server
+const server = http.createServer(requestListener);
+
+// Listen on port 9000
+server.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
